@@ -11,9 +11,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
 from dotenv import load_dotenv
 
-# -----------------------------
-# Config
-# -----------------------------
 load_dotenv()
 
 SF_USERNAME = os.getenv("SF_USERNAME")
@@ -21,30 +18,16 @@ SF_PASSWORD = os.getenv("SF_PASSWORD")
 SF_SECURITY_TOKEN = os.getenv("SF_SECURITY_TOKEN")
 SF_DOMAIN = os.getenv("SF_DOMAIN", "login")
 
-MIN_SAMPLES_PER_TYPE = 10
+MIN_SAMPLES_PER_TYPE = int(os.getenv("MIN_SAMPLES_PER_TYPE", 10))
 MODEL_DIR = "models"
 COMPLETION_STATUSES = {"Completed", "Closed"}
+WO_EVENT_FIELD = os.getenv("WO_EVENT_FIELD", "LastModifiedDate")  # or CreatedDate / your custom field
 
-# Choose which WO field to treat as the "completion event time".
-# Common choices: LastModifiedDate (default), CreatedDate, a custom Actual_Completion__c (Date/DateTime)
-WO_EVENT_FIELD = os.getenv("WO_EVENT_FIELD", "LastModifiedDate")  # <- configurable
-
-# -----------------------------
-# Connect to Salesforce
-# -----------------------------
 if not (SF_USERNAME and SF_PASSWORD and SF_SECURITY_TOKEN):
     raise SystemExit("Missing Salesforce credentials. Set SF_USERNAME, SF_PASSWORD, SF_SECURITY_TOKEN.")
 
-sf = Salesforce(
-    username=SF_USERNAME,
-    password=SF_PASSWORD,
-    security_token=SF_SECURITY_TOKEN,
-    domain=SF_DOMAIN
-)
+sf = Salesforce(username=SF_USERNAME, password=SF_PASSWORD, security_token=SF_SECURITY_TOKEN, domain=SF_DOMAIN)
 
-# -----------------------------
-# Pull Telemetry (+ Asset Type)
-# -----------------------------
 telemetry = sf.query_all("""
 SELECT Id, Asset__c, Ingested_At__c,
        Temperature__c, Vibration_Level__c, Voltage__c, Operating_Hours__c,
@@ -66,11 +49,7 @@ def extract_asset_type(val):
 
 t_df["AssetType"] = t_df.get("Asset__r", pd.Series([None] * len(t_df))).apply(extract_asset_type)
 
-# -----------------------------
-# Pull Completed/Closed Work Orders
-# Using a configurable "event time" field; fallback to CreatedDate if needed
-# -----------------------------
-work_orders = sf.query_all(f"""
+work_orders = sf.query_all("""
 SELECT Id, AssetId, Status, CreatedDate, LastModifiedDate
 FROM WorkOrder
 WHERE AssetId != NULL
@@ -81,26 +60,19 @@ wo_df = pd.DataFrame(work_orders)
 if wo_df.empty:
     raise SystemExit("No Completed or Closed WorkOrder data found.")
 
-# Parse dates (naive)
 for col in ("CreatedDate", "LastModifiedDate"):
     if col in wo_df.columns:
         wo_df[col] = pd.to_datetime(wo_df[col], errors="coerce").dt.tz_localize(None)
     else:
         wo_df[col] = pd.NaT
 
-# Select event time column, fallback to CreatedDate, then drop nulls
 if WO_EVENT_FIELD not in wo_df.columns:
-    # If the requested field isn't present in the SOQL (e.g., a custom field), try to fetch it:
-    # You can add the field to the SOQL above or just fallback here.
     print(f"[WARN] WO_EVENT_FIELD '{WO_EVENT_FIELD}' not in results; falling back to LastModifiedDate/CreatedDate.")
     WO_EVENT_FIELD = "LastModifiedDate"
 
 wo_df["EventTime"] = wo_df[WO_EVENT_FIELD].where(wo_df[WO_EVENT_FIELD].notna(), wo_df["CreatedDate"])
 wo_df = wo_df[wo_df["EventTime"].notna()].copy()
 
-# -----------------------------
-# Build label: days until next completed/closed WO after telemetry
-# -----------------------------
 def next_maintenance_days(asset_id, ing_time):
     if pd.isna(ing_time) or asset_id is None:
         return np.nan
@@ -111,27 +83,17 @@ def next_maintenance_days(asset_id, ing_time):
     delta_days = (next_time - ing_time).days
     return float(max(delta_days, 0))
 
-t_df["label_days"] = t_df.apply(
-    lambda r: next_maintenance_days(r["Asset__c"], r["Ingested_At__c"]),
-    axis=1
-)
-
+t_df["label_days"] = t_df.apply(lambda r: next_maintenance_days(r["Asset__c"], r["Ingested_At__c"]), axis=1)
 t_df = t_df.dropna(subset=["label_days", "AssetType"]).copy()
 if t_df.empty:
     raise SystemExit("No labeled telemetry rows with valid AssetType found (no later completed/closed WO).")
 
-# -----------------------------
-# Feature hygiene
-# -----------------------------
 FEATURES = ["Temperature__c", "Vibration_Level__c", "Voltage__c", "Operating_Hours__c"]
 for c in FEATURES:
     t_df[c] = pd.to_numeric(t_df[c], errors="coerce").fillna(0.0)
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# -----------------------------
-# Train per AssetType
-# -----------------------------
 asset_types = sorted(t_df["AssetType"].dropna().unique())
 print(f"Found {len(asset_types)} Asset types: {asset_types}")
 
@@ -162,7 +124,7 @@ for asset_type, grp in t_df.groupby("AssetType"):
 
     meta = {
         "assetType": asset_type,
-        "features": ["Temperature", "Vibration_Level", "Voltage", "Operating_Hours"],  # served order
+        "features": ["Temperature", "Vibration_Level", "Voltage", "Operating_Hours"],
         "samples_total": int(n),
         "samples_train": int(len(Xtr)),
         "samples_test": int(len(Xte)),

@@ -7,24 +7,19 @@ from threading import Lock
 
 load_dotenv()
 
-# ---- Risk thresholds (days) ----
 CRIT_MAX = int(os.getenv("CRITICAL_MAX_DAYS", 3))
 HIGH_MAX = int(os.getenv("HIGH_MAX_DAYS", 7))
 MED_MAX  = int(os.getenv("MEDIUM_MAX_DAYS", 14))
 MODEL_DIR = os.getenv("MODEL_DIR", "models")
 
-# Model cache to avoid disk loads per request
 _model_cache = {}
 _model_lock = Lock()
-
-# Expected metric order (must align with training)
 FEATURES = ["Temperature", "Vibration_Level", "Voltage", "Operating_Hours"]
 
 def _normalize_asset_type(name: str) -> str:
     return (name or "").strip()
 
 def list_models():
-    """Return a dict {asset_type_display: path} for all trained models."""
     models = {}
     if not os.path.exists(MODEL_DIR):
         return models
@@ -35,7 +30,6 @@ def list_models():
     return models
 
 def load_model(asset_type: str):
-    """Dynamically load model for given asset type, with caching."""
     at = _normalize_asset_type(asset_type)
     available = list_models()
     if at not in available:
@@ -55,7 +49,6 @@ def risk_from_days(days: float) -> str:
     return "Low"
 
 def _vector_from_metrics(m: dict) -> np.ndarray:
-    """Build the feature vector in the trained order."""
     vals = []
     for key in FEATURES:
         try:
@@ -87,25 +80,16 @@ def predict():
 
     try:
         model = load_model(asset_type)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-    try:
         X = _vector_from_metrics(metrics)
-    except ValueError as ve:
-        return jsonify({"error": str(ve)}), 400
-
-    try:
         days = float(model.predict(X)[0])
     except Exception as e:
-        return jsonify({"error": f"model prediction failed: {str(e)}"}), 500
+        return jsonify({"error": str(e)}), 400
 
     days = max(0.0, days)
     return jsonify({
         "assetType": _normalize_asset_type(asset_type),
         "riskLevel": risk_from_days(days),
         "remainingUsefulLifeHrs": round(days * 24.0, 2)
-        # "explanations": []  # Optional future work (e.g., SHAP)
     }), 200
 
 if __name__ == "__main__":

@@ -6,12 +6,13 @@
     "Voltage",
     "Operating_Hours"
   ],
-  "samples_total": 32,
-  "samples_train": 25,
-  "samples_test": 7,
+  "samples_total": 40000,
+  "samples_train": 32000,
+  "samples_test": 8000,
   "metrics": {
-    "MAE_days": 0.6919047619047624,
-    "R2": 0.9917449729189672
+    "MAE_days": 7.602992234291005,
+    "R2": 0.30652620900199
   },
-  "wo_event_field": "LastModifiedDate"
+  "wo_event_field": "LastModifiedDate",
+  "model_type": "HistGradientBoostingRegressor"
 }

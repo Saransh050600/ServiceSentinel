@@ -1,139 +1,162 @@
 import os
 import json
-import pandas as pd
+import math
+import argparse
 import numpy as np
+import pandas as pd
 import joblib
-from simple_salesforce import Salesforce
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
+
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
-from dotenv import load_dotenv
+from sklearn.ensemble import HistGradientBoostingRegressor
 
-load_dotenv()
+# -------- CLI --------
+def parse_args():
+    ap = argparse.ArgumentParser(description="Train HGB regressors per AssetType from Excel (no Salesforce).")
+    ap.add_argument("--excel", required=True, help="Path to the Excel file containing both sheets")
+    ap.add_argument("--telemetry-sheet", default="Telemetry", help="Telemetry sheet name")
+    ap.add_argument("--workorders-sheet", default="WorkOrders", help="WorkOrders sheet name")
+    ap.add_argument("--wo-event-field", default="LastModifiedDate",
+                    help="WO event time column to use (LastModifiedDate or CreatedDate)")
+    ap.add_argument("--min-samples", type=int, default=10, help="Minimum labeled rows per AssetType to fit a model")
+    ap.add_argument("--test-size", type=float, default=0.2, help="Holdout fraction")
+    ap.add_argument("--random-state", type=int, default=13, help="Random seed")
+    ap.add_argument("--model-dir", default="models", help="Directory to write models and meta")
+    return ap.parse_args()
 
-SF_USERNAME = os.getenv("SF_USERNAME")
-SF_PASSWORD = os.getenv("SF_PASSWORD")
-SF_SECURITY_TOKEN = os.getenv("SF_SECURITY_TOKEN")
-SF_DOMAIN = os.getenv("SF_DOMAIN", "login")
-
-MIN_SAMPLES_PER_TYPE = int(os.getenv("MIN_SAMPLES_PER_TYPE", 10))
-MODEL_DIR = "models"
 COMPLETION_STATUSES = {"Completed", "Closed"}
-WO_EVENT_FIELD = os.getenv("WO_EVENT_FIELD", "LastModifiedDate")  # or CreatedDate / your custom field
-
-if not (SF_USERNAME and SF_PASSWORD and SF_SECURITY_TOKEN):
-    raise SystemExit("Missing Salesforce credentials. Set SF_USERNAME, SF_PASSWORD, SF_SECURITY_TOKEN.")
-
-sf = Salesforce(username=SF_USERNAME, password=SF_PASSWORD, security_token=SF_SECURITY_TOKEN, domain=SF_DOMAIN)
-
-telemetry = sf.query_all("""
-SELECT Id, Asset__c, Ingested_At__c,
-       Temperature__c, Vibration_Level__c, Voltage__c, Operating_Hours__c,
-       Asset__r.AssetType__c
-FROM Telemetry__c
-WHERE Asset__c != NULL
-""")["records"]
-
-t_df = pd.DataFrame(telemetry)
-if t_df.empty:
-    raise SystemExit("No Telemetry__c data found.")
-
-t_df["Ingested_At__c"] = pd.to_datetime(t_df["Ingested_At__c"], errors="coerce").dt.tz_localize(None)
-
-def extract_asset_type(val):
-    if isinstance(val, dict):
-        return val.get("AssetType__c")
-    return None
-
-t_df["AssetType"] = t_df.get("Asset__r", pd.Series([None] * len(t_df))).apply(extract_asset_type)
-
-work_orders = sf.query_all("""
-SELECT Id, AssetId, Status, CreatedDate, LastModifiedDate
-FROM WorkOrder
-WHERE AssetId != NULL
-  AND (Status = 'Completed' OR Status = 'Closed')
-""")["records"]
-
-wo_df = pd.DataFrame(work_orders)
-if wo_df.empty:
-    raise SystemExit("No Completed or Closed WorkOrder data found.")
-
-for col in ("CreatedDate", "LastModifiedDate"):
-    if col in wo_df.columns:
-        wo_df[col] = pd.to_datetime(wo_df[col], errors="coerce").dt.tz_localize(None)
-    else:
-        wo_df[col] = pd.NaT
-
-if WO_EVENT_FIELD not in wo_df.columns:
-    print(f"[WARN] WO_EVENT_FIELD '{WO_EVENT_FIELD}' not in results; falling back to LastModifiedDate/CreatedDate.")
-    WO_EVENT_FIELD = "LastModifiedDate"
-
-wo_df["EventTime"] = wo_df[WO_EVENT_FIELD].where(wo_df[WO_EVENT_FIELD].notna(), wo_df["CreatedDate"])
-wo_df = wo_df[wo_df["EventTime"].notna()].copy()
-
-def next_maintenance_days(asset_id, ing_time):
-    if pd.isna(ing_time) or asset_id is None:
-        return np.nan
-    rows = wo_df[(wo_df["AssetId"] == asset_id) & (wo_df["EventTime"] > ing_time)]
-    if rows.empty:
-        return np.nan
-    next_time = rows["EventTime"].min()
-    delta_days = (next_time - ing_time).days
-    return float(max(delta_days, 0))
-
-t_df["label_days"] = t_df.apply(lambda r: next_maintenance_days(r["Asset__c"], r["Ingested_At__c"]), axis=1)
-t_df = t_df.dropna(subset=["label_days", "AssetType"]).copy()
-if t_df.empty:
-    raise SystemExit("No labeled telemetry rows with valid AssetType found (no later completed/closed WO).")
 
 FEATURES = ["Temperature__c", "Vibration_Level__c", "Voltage__c", "Operating_Hours__c"]
-for c in FEATURES:
-    t_df[c] = pd.to_numeric(t_df[c], errors="coerce").fillna(0.0)
 
-os.makedirs(MODEL_DIR, exist_ok=True)
+def ensure_datetime(series: pd.Series) -> pd.Series:
+    return pd.to_datetime(series, errors="coerce").dt.tz_localize(None)
 
-asset_types = sorted(t_df["AssetType"].dropna().unique())
-print(f"Found {len(asset_types)} Asset types: {asset_types}")
+def next_maintenance_days_factory(wo_by_asset: dict, event_col: str):
+    def _fn(asset_id, ing_time):
+        if pd.isna(ing_time) or pd.isna(asset_id):
+            return np.nan
+        g = wo_by_asset.get(asset_id)
+        if g is None or g.empty:
+            return np.nan
+        # find first WO strictly after the telemetry timestamp
+        idx = g[event_col].searchsorted(ing_time, side="right")
+        if idx >= len(g):
+            return np.nan
+        next_time = g[event_col].iloc[idx]
+        return float(max((next_time - ing_time).days, 0))
+    return _fn
 
-for asset_type, grp in t_df.groupby("AssetType"):
-    n = len(grp)
-    if n < MIN_SAMPLES_PER_TYPE:
-        print(f"Skipping '{asset_type}': insufficient samples ({n} < {MIN_SAMPLES_PER_TYPE})")
-        continue
+def main():
+    args = parse_args()
+    os.makedirs(args.model_dir, exist_ok=True)
 
-    X = grp[FEATURES].values
-    y = grp["label_days"].values
+    # ---- Read Excel ----
+    try:
+        t_df = pd.read_excel(args.excel, sheet_name=args.telemetry_sheet)
+    except Exception as e:
+        raise SystemExit(f"Failed reading telemetry sheet '{args.telemetry_sheet}': {e}")
 
-    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=13)
+    try:
+        wo_df = pd.read_excel(args.excel, sheet_name=args.workorders_sheet)
+    except Exception as e:
+        raise SystemExit(f"Failed reading workorders sheet '{args.workorders_sheet}': {e}")
 
-    pipe = Pipeline([
-        ("scaler", StandardScaler()),
-        ("rf", RandomForestRegressor(n_estimators=300, n_jobs=-1, random_state=13))
-    ])
-    pipe.fit(Xtr, ytr)
+    if t_df.empty:
+        raise SystemExit("No telemetry rows found.")
+    if wo_df.empty:
+        raise SystemExit("No work order rows found.")
 
-    ypred = pipe.predict(Xte)
-    mae = float(mean_absolute_error(yte, ypred))
-    r2 = float(r2_score(yte, ypred))
+    # ---- Basic column checks (exact names as requested) ----
+    tel_required = ["Asset__c", "AssetType__c", "Ingested_At__c"] + FEATURES
+    missing_tel = [c for c in tel_required if c not in t_df.columns]
+    if missing_tel:
+        raise SystemExit(f"Telemetry sheet is missing columns: {missing_tel}")
 
-    safe_type = str(asset_type).replace(" ", "_")
-    model_path = os.path.join(MODEL_DIR, f"regressor_{safe_type}.pkl")
-    joblib.dump(pipe, model_path)
+    wo_required = ["Id", "AssetId", "Status", "CreatedDate", "LastModifiedDate"]
+    missing_wo = [c for c in wo_required if c not in wo_df.columns]
+    if missing_wo:
+        raise SystemExit(f"WorkOrders sheet is missing columns: {missing_wo}")
 
-    meta = {
-        "assetType": asset_type,
-        "features": ["Temperature", "Vibration_Level", "Voltage", "Operating_Hours"],
-        "samples_total": int(n),
-        "samples_train": int(len(Xtr)),
-        "samples_test": int(len(Xte)),
-        "metrics": {"MAE_days": mae, "R2": r2},
-        "wo_event_field": WO_EVENT_FIELD
-    }
-    with open(os.path.join(MODEL_DIR, f"regressor_{safe_type}.meta.json"), "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2)
+    # ---- Normalize dtypes ----
+    t_df["Ingested_At__c"] = ensure_datetime(t_df["Ingested_At__c"])
+    for c in FEATURES:
+        t_df[c] = pd.to_numeric(t_df[c], errors="coerce").fillna(0.0)
 
-    print(f"✅ Trained '{asset_type}' → {model_path} | MAE(days)={mae:.3f}, R²={r2:.3f} (event={WO_EVENT_FIELD})")
+    # event time for WO
+    wo_df["CreatedDate"] = ensure_datetime(wo_df["CreatedDate"])
+    wo_df["LastModifiedDate"] = ensure_datetime(wo_df["LastModifiedDate"])
 
-print("🎯 Training complete for all available Asset types.")
+    if args.wo_event_field not in wo_df.columns:
+        print(f"[WARN] WO event field '{args.wo_event_field}' not found. Falling back to LastModifiedDate/CreatedDate.")
+        wo_event_col = "LastModifiedDate"
+    else:
+        wo_event_col = args.wo_event_field
+
+    wo_df["EventTime"] = wo_df[wo_event_col].where(wo_df[wo_event_col].notna(), wo_df["CreatedDate"])
+    wo_df = wo_df[(wo_df["AssetId"].notna()) & (wo_df["EventTime"].notna())].copy()
+
+    # Keep Completed/Closed WOs only
+    wo_df = wo_df[wo_df["Status"].astype(str).isin(COMPLETION_STATUSES)].copy()
+    if wo_df.empty:
+        raise SystemExit("No Completed/Closed WorkOrders with valid timestamps.")
+
+    # ---- Pre-index WO by AssetId ----
+    wo_df = wo_df.sort_values("EventTime")
+    wo_by_asset = dict(tuple(wo_df.groupby("AssetId")))
+    get_label = next_maintenance_days_factory(wo_by_asset, "EventTime")
+
+    # ---- Build labels (days to next maintenance) ----
+    t_df["label_days"] = t_df.apply(lambda r: get_label(r["Asset__c"], r["Ingested_At__c"]), axis=1)
+    t_df = t_df.dropna(subset=["label_days", "AssetType__c"]).copy()
+    if t_df.empty:
+        raise SystemExit("No labeled telemetry rows with valid AssetType__c found (no later Completed/Closed WO).")
+
+    asset_types = sorted(t_df["AssetType__c"].dropna().astype(str).unique())
+    print(f"Found {len(asset_types)} Asset types: {asset_types}")
+
+    # ---- Train per AssetType ----
+    for asset_type, grp in t_df.groupby("AssetType__c"):
+        grp = grp.dropna(subset=FEATURES + ["label_days"])
+        n = len(grp)
+        if n < args.min_samples:
+            print(f"Skipping '{asset_type}': insufficient samples ({n} < {args.min_samples})")
+            continue
+
+        X = grp[FEATURES].values
+        y = grp["label_days"].values
+
+        Xtr, Xte, ytr, yte = train_test_split(
+            X, y, test_size=args.test_size, random_state=args.random_state
+        )
+
+        # HGB does not require feature scaling
+        model = HistGradientBoostingRegressor(random_state=args.random_state)
+        model.fit(Xtr, ytr)
+
+        ypred = model.predict(Xte)
+        mae = float(mean_absolute_error(yte, ypred))
+        r2 = float(r2_score(yte, ypred))
+
+        safe_type = str(asset_type).replace(" ", "_")
+        model_path = os.path.join(args.model_dir, f"regressor_{safe_type}.pkl")
+        joblib.dump(model, model_path)
+
+        meta = {
+            "assetType": asset_type,
+            "features": ["Temperature", "Vibration_Level", "Voltage", "Operating_Hours"],
+            "samples_total": int(n),
+            "samples_train": int(len(Xtr)),
+            "samples_test": int(len(Xte)),
+            "metrics": {"MAE_days": mae, "R2": r2},
+            "wo_event_field": wo_event_col,
+            "model_type": "HistGradientBoostingRegressor"
+        }
+        with open(os.path.join(args.model_dir, f"regressor_{safe_type}.meta.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+
+        print(f"✅ Trained '{asset_type}' → {model_path} | MAE(days)={mae:.3f}, R²={r2:.3f} (event={wo_event_col})")
+
+    print("🎯 Training complete for all available Asset types.")
+
+if __name__ == "__main__":
+    main()

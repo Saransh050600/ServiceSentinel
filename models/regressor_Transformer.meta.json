@@ -10,9 +10,9 @@
   "samples_train": 32000,
   "samples_test": 8000,
   "metrics": {
-    "MAE_days": 7.602992234291005,
-    "R2": 0.30652620900199
+    "MAE_days": 8.164075724043364,
+    "R2": 0.2856250668030005
   },
-  "wo_event_field": "LastModifiedDate",
+  "wo_event_field": "CreatedDate",
   "model_type": "HistGradientBoostingRegressor"
 }

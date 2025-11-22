@@ -32,6 +32,7 @@ def parse_args():
     ap.add_argument("--telemetry-sheet", default="Telemetry")
     ap.add_argument("--workorders-sheet", default="WorkOrders")
     ap.add_argument("--min-samples", type=int, default=10)
+    # Back to 0.2 like your good run
     ap.add_argument("--test-size", type=float, default=0.2)
     ap.add_argument("--random-state", type=int, default=13)
     ap.add_argument("--summary-path", default="excel_model_eval_summary.json")
@@ -176,7 +177,7 @@ def main():
             X, y, test_size=args.test_size, random_state=args.random_state
         )
 
-        # Models
+        # -------- Models (back to your original settings) --------
         models = {
             "rf": Pipeline([
                 ("scaler", StandardScaler()),
@@ -229,7 +230,7 @@ def main():
                 global_model_stats[name]["sum_weighted_acc"] += acc * n
                 global_model_stats[name]["sum_samples"] += n
 
-        # Winner per asset type
+        # Winner per asset type (pure max Accuracy)
         best_name = max(metrics.keys(), key=lambda k: metrics[k]["Accuracy%"])
         best = metrics[best_name]
 

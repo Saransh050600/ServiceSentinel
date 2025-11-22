@@ -13,12 +13,12 @@
   "samples_train": 24000,
   "samples_test": 6000,
   "metrics": {
-    "MAE": 13.727244164401728,
-    "RMSE": 17.261972276991795,
-    "R2": 0.017050700860656298,
-    "MAPE%": 20.662513068503046,
-    "Accuracy%": 79.33748693149695
+    "MAE": 2.48421745467186,
+    "RMSE": 3.096414597977438,
+    "R2": 0.7381624609417471,
+    "MAPE%": 12.407653448766204,
+    "Accuracy%": 87.59234655123379
   },
-  "model_type": "HistGradientBoostingRegressor",
-  "winner_key": "hgb"
+  "model_type": "XGBRegressor",
+  "winner_key": "xgb"
 }

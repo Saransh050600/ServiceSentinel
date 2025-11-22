@@ -1,0 +1,24 @@
+{
+  "assetType": "Generator",
+  "features": [
+    "Temperature__c",
+    "Vibration_Level__c",
+    "Voltage__c",
+    "Operating_Hours__c",
+    "Oil_Pressure__c",
+    "Fuel_Level__c",
+    "Battery_Voltage__c"
+  ],
+  "samples_total": 30000,
+  "samples_train": 24000,
+  "samples_test": 6000,
+  "metrics": {
+    "MAE": 13.727244164401728,
+    "RMSE": 17.261972276991795,
+    "R2": 0.017050700860656298,
+    "MAPE%": 20.662513068503046,
+    "Accuracy%": 79.33748693149695
+  },
+  "model_type": "HistGradientBoostingRegressor",
+  "winner_key": "hgb"
+}

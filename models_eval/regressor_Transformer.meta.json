@@ -1,0 +1,21 @@
+{
+  "assetType": "Transformer",
+  "features": [
+    "Temperature__c",
+    "Vibration_Level__c",
+    "Voltage__c",
+    "Operating_Hours__c"
+  ],
+  "samples_total": 30000,
+  "samples_train": 24000,
+  "samples_test": 6000,
+  "metrics": {
+    "MAE": 12.603100786289534,
+    "RMSE": 15.695334737640959,
+    "R2": 0.018694354269053748,
+    "MAPE%": 18.288127043959857,
+    "Accuracy%": 81.71187295604014
+  },
+  "model_type": "HistGradientBoostingRegressor",
+  "winner_key": "hgb"
+}

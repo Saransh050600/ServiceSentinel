@@ -1,0 +1,115 @@
+{
+  "results": [
+    {
+      "assetType": "Generator",
+      "samples": 30000,
+      "features": [
+        "Temperature__c",
+        "Vibration_Level__c",
+        "Voltage__c",
+        "Operating_Hours__c",
+        "Oil_Pressure__c",
+        "Fuel_Level__c",
+        "Battery_Voltage__c"
+      ],
+      "metrics": {
+        "rf": {
+          "MAE": 13.826883000000002,
+          "RMSE": 17.407321829563557,
+          "R2": 0.00042771688704423827,
+          "MAPE%": 20.761917148363008,
+          "Accuracy%": 79.23808285163699
+        },
+        "hgb": {
+          "MAE": 13.727244164401728,
+          "RMSE": 17.261972276991795,
+          "R2": 0.017050700860656298,
+          "MAPE%": 20.662513068503046,
+          "Accuracy%": 79.33748693149695
+        },
+        "xgb": {
+          "MAE": 13.935065446853638,
+          "RMSE": 17.538498016107248,
+          "R2": -0.014693979801483126,
+          "MAPE%": 20.911462608153762,
+          "Accuracy%": 79.08853739184624
+        }
+      },
+      "winner": {
+        "name": "hgb",
+        "metrics": {
+          "MAE": 13.727244164401728,
+          "RMSE": 17.261972276991795,
+          "R2": 0.017050700860656298,
+          "MAPE%": 20.662513068503046,
+          "Accuracy%": 79.33748693149695
+        },
+        "model_path": "models_eval\\regressor_Generator.pkl",
+        "meta_path": "models_eval\\regressor_Generator.meta.json"
+      }
+    },
+    {
+      "assetType": "Transformer",
+      "samples": 30000,
+      "features": [
+        "Temperature__c",
+        "Vibration_Level__c",
+        "Voltage__c",
+        "Operating_Hours__c"
+      ],
+      "metrics": {
+        "rf": {
+          "MAE": 12.906181666666667,
+          "RMSE": 16.101491289380622,
+          "R2": -0.03275031346313484,
+          "MAPE%": 18.705527463984644,
+          "Accuracy%": 81.29447253601535
+        },
+        "hgb": {
+          "MAE": 12.603100786289534,
+          "RMSE": 15.695334737640959,
+          "R2": 0.018694354269053748,
+          "MAPE%": 18.288127043959857,
+          "Accuracy%": 81.71187295604014
+        },
+        "xgb": {
+          "MAE": 12.80390011660258,
+          "RMSE": 15.952501149062991,
+          "R2": -0.013726271644721733,
+          "MAPE%": 18.578143367726565,
+          "Accuracy%": 81.42185663227343
+        }
+      },
+      "winner": {
+        "name": "hgb",
+        "metrics": {
+          "MAE": 12.603100786289534,
+          "RMSE": 15.695334737640959,
+          "R2": 0.018694354269053748,
+          "MAPE%": 18.288127043959857,
+          "Accuracy%": 81.71187295604014
+        },
+        "model_path": "models_eval\\regressor_Transformer.pkl",
+        "meta_path": "models_eval\\regressor_Transformer.meta.json"
+      }
+    }
+  ],
+  "combined": {
+    "rf": {
+      "weighted_avg_accuracy": 80.26627769382618,
+      "total_samples": 60000
+    },
+    "xgb": {
+      "weighted_avg_accuracy": 80.25519701205982,
+      "total_samples": 60000
+    },
+    "hgb": {
+      "weighted_avg_accuracy": 80.52467994376856,
+      "total_samples": 60000
+    }
+  },
+  "global_winner": {
+    "name": "hgb",
+    "weighted_avg_accuracy": 80.52467994376856
+  }
+}

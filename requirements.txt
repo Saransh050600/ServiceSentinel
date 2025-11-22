@@ -18,3 +18,4 @@ requests-toolbelt
 zeep
 pyjwt
 cryptography
+xgboost==1.7.6
